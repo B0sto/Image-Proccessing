@@ -7,7 +7,6 @@ import { InjectModel } from '@nestjs/mongoose';
 import { Express } from 'express';
 import { Model, Types } from 'mongoose';
 import sharp, { Sharp } from 'sharp';
-import { createHash } from 'crypto';
 import { AwsService } from '../aws/aws.service';
 import { RetrieveImageQueryDto } from './dto/retrieve-image-query.dto';
 import {
@@ -71,11 +70,7 @@ export class ImagesService {
     });
 
     const imageId = image._id.toString();
-    const originalKey = this.buildOriginalKey(
-      userId,
-      imageId,
-      normalizedFormat,
-    );
+    const originalKey = this.buildOriginalKey(imageId, normalizedFormat);
     await this.awsService.uploadObject(
       originalKey,
       file.buffer,
@@ -118,29 +113,34 @@ export class ImagesService {
     };
   }
 
+  async deleteImage(userId: string, imageId: string) {
+    const image = await this.findOwnedImage(userId, imageId);
+
+    const keysToDelete = [
+      image.originalKey,
+      ...(image.variants ?? []).map((variant) => variant.key),
+    ].filter((key) => !!key);
+
+    await this.awsService.deleteObjects(keysToDelete);
+    await this.imageModel.deleteOne({ _id: image._id });
+
+    return {
+      id: image._id.toString(),
+      deleted: true,
+      removedKeys: keysToDelete.length,
+    };
+  }
+
   async transformImage(
     userId: string,
     imageId: string,
     dto: TransformImageDto,
-  ) {
+  ): Promise<BinaryImageResult> {
     const image = await this.findOwnedImage(userId, imageId);
     const transformations = dto.transformations;
 
     if (!transformations || Object.keys(transformations).length === 0) {
       throw new BadRequestException('At least one transformation is required');
-    }
-
-    const transformHash = this.hashTransformations(transformations);
-    const existingVariant = image.variants?.find(
-      (variant) => variant.hash === transformHash,
-    );
-
-    if (existingVariant) {
-      return this.toVariantResponse(
-        image._id.toString(),
-        existingVariant,
-        true,
-      );
     }
 
     const source = await this.awsService.getObject(image.originalKey);
@@ -150,34 +150,11 @@ export class ImagesService {
       this.normalizeFormat(image.format) ?? 'jpeg',
     );
 
-    const variantKey = this.buildVariantKey(
-      userId,
-      image._id.toString(),
-      transformHash,
-      transformed.format,
-    );
-    await this.awsService.uploadObject(
-      variantKey,
-      transformed.buffer,
-      transformed.contentType,
-    );
-
-    const variant: ImageVariant = {
-      hash: transformHash,
-      key: variantKey,
+    return {
+      buffer: transformed.buffer,
       contentType: transformed.contentType,
-      format: transformed.format,
-      size: transformed.buffer.length,
-      width: transformed.width,
-      height: transformed.height,
-      transformations: transformations as unknown as Record<string, unknown>,
-      createdAt: new Date(),
+      fileName: `${image._id.toString()}-preview.${transformed.format === 'jpg' ? 'jpeg' : transformed.format}`,
     };
-
-    image.variants.push(variant);
-    await image.save();
-
-    return this.toVariantResponse(image._id.toString(), variant, false);
   }
 
   async getImageBinary(
@@ -359,49 +336,8 @@ export class ImagesService {
     }
   }
 
-  private hashTransformations(transformations: TransformationsDto) {
-    const normalized = this.sortObjectKeys(transformations);
-    return createHash('sha256')
-      .update(JSON.stringify(normalized))
-      .digest('hex')
-      .slice(0, 24);
-  }
-
-  private sortObjectKeys(value: unknown): unknown {
-    if (Array.isArray(value)) {
-      return value.map((item) => this.sortObjectKeys(item));
-    }
-
-    if (value && typeof value === 'object') {
-      const obj = value as Record<string, unknown>;
-      return Object.keys(obj)
-        .sort()
-        .reduce<Record<string, unknown>>((acc, key) => {
-          if (obj[key] !== undefined) {
-            acc[key] = this.sortObjectKeys(obj[key]);
-          }
-          return acc;
-        }, {});
-    }
-
-    return value;
-  }
-
-  private buildOriginalKey(
-    userId: string,
-    imageId: string,
-    format: SupportedImageFormat,
-  ) {
-    return `users/${userId}/images/${imageId}/original.${format === 'jpg' ? 'jpeg' : format}`;
-  }
-
-  private buildVariantKey(
-    userId: string,
-    imageId: string,
-    hash: string,
-    format: SupportedImageFormat,
-  ) {
-    return `users/${userId}/images/${imageId}/variants/${hash}.${format === 'jpg' ? 'jpeg' : format}`;
+  private buildOriginalKey(imageId: string, format: SupportedImageFormat) {
+    return `images/${imageId}.${format === 'jpg' ? 'jpeg' : format}`;
   }
 
   private formatToMime(format: SupportedImageFormat) {
@@ -530,26 +466,4 @@ export class ImagesService {
     };
   }
 
-  private toVariantResponse(
-    imageId: string,
-    variant: ImageVariant,
-    cached: boolean,
-  ) {
-    return {
-      imageId,
-      cached,
-      variant: {
-        hash: variant.hash,
-        key: variant.key,
-        url: `/images/${imageId}?variant=${variant.hash}`,
-        format: variant.format,
-        contentType: variant.contentType,
-        size: variant.size,
-        width: variant.width,
-        height: variant.height,
-        transformations: variant.transformations,
-        createdAt: variant.createdAt,
-      },
-    };
-  }
 }

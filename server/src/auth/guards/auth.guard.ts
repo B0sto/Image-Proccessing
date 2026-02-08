@@ -1,4 +1,4 @@
-import { BadRequestException, CanActivate, ExecutionContext, Injectable } from "@nestjs/common"
+import { CanActivate, ExecutionContext, Injectable, UnauthorizedException } from "@nestjs/common"
 import { JwtService } from "@nestjs/jwt";
 import { Observable } from "rxjs"
 
@@ -10,17 +10,17 @@ export class AuthGuard implements CanActivate {
         const req = context.switchToHttp().getRequest();
         const token = this.getToken(req.headers);
 
-        if (!token) throw new BadRequestException();
+        if (!token) throw new UnauthorizedException("Unauthorized");
 
         try {
             const payload = this.jwtService.verify(token);
             req.userId = payload.userId
         }catch (e) {
-            throw new BadRequestException(e);
+            throw new UnauthorizedException("Token is invalid or expired");
         }
 
 
-        return req.headers;
+        return true;
     }
 
 

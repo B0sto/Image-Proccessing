@@ -78,4 +78,5 @@ export class Image {
   updatedAt?: Date;
 }
 
+
 export const imageSchema = SchemaFactory.createForClass(Image);

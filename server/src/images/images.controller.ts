@@ -2,6 +2,7 @@ import {
   BadRequestException,
   Body,
   Controller,
+  Delete,
   Get,
   Param,
   Post,
@@ -37,17 +38,26 @@ export class ImagesController {
   }
 
   @Post(':id/transform')
-  transformImage(
+  async transformImage(
     @Req() req,
     @Param('id') id: string,
     @Body() dto: TransformImageDto,
+    @Res({ passthrough: true }) res: Response,
   ) {
-    return this.imagesService.transformImage(req.userId, id, dto);
+    const file = await this.imagesService.transformImage(req.userId, id, dto);
+    res.setHeader('Content-Type', file.contentType);
+    res.setHeader('Content-Disposition', `inline; filename="${file.fileName}"`);
+    return new StreamableFile(file.buffer);
   }
 
   @Get()
   listImages(@Req() req, @Query() query: ListImagesQueryDto) {
     return this.imagesService.listImages(req.userId, query.page, query.limit);
+  }
+
+  @Delete(':id')
+  deleteImage(@Req() req, @Param('id') id: string) {
+    return this.imagesService.deleteImage(req.userId, id);
   }
 
   @Get(':id')

@@ -11,7 +11,8 @@ export class AuthService {
 
     async signUp(signUpDto: SignUpDto) {
         const existingUser = await this.userService.findByEmail(signUpDto.email);
-        if (!existingUser) throw new BadGatewayException("This user already exists");
+        const existingUsername = await this.userService.findByUsername(signUpDto.username);
+        if (existingUser || existingUsername) throw new BadGatewayException("This user already exists");
 
         const hashedPass = await bcrypt.hash(signUpDto.password, 10);
 

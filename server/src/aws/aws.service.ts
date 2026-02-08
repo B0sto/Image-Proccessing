@@ -1,4 +1,5 @@
 import {
+  DeleteObjectCommand,
   GetObjectCommand,
   PutObjectCommand,
   S3Client,
@@ -43,6 +44,31 @@ export class AwsService {
     const uploadCommand = new PutObjectCommand(config);
     await this.s3.send(uploadCommand);
     return key;
+  }
+
+  async deleteObject(key: string) {
+    if (!key) {
+      throw new BadRequestException('key is required');
+    }
+
+    const command = new DeleteObjectCommand({
+      Key: key,
+      Bucket: this.bucketName,
+    });
+
+    await this.s3.send(command);
+  }
+
+  async deleteObjects(keys: string[]) {
+    if (!Array.isArray(keys) || keys.length === 0) {
+      return;
+    }
+
+    await Promise.all(
+      keys
+        .filter((key) => !!key)
+        .map((key) => this.deleteObject(key)),
+    );
   }
 
   async getObject(key: string): Promise<S3ObjectResult> {

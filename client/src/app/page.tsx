@@ -1,6 +1,6 @@
 'use client';
 
-import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
+import { useCallback, useEffect, useMemo, useRef, useState, type ChangeEvent } from 'react';
 import { useRouter } from 'next/navigation';
 import { useAuth } from '@/hooks/useAuth';
 
@@ -19,8 +19,12 @@ type WatermarkPosition =
 
 interface ImageVariant {
   hash: string;
+  url?: string;
   format: string;
+  contentType?: string;
   size: number;
+  width?: number;
+  height?: number;
 }
 
 interface ImageItem {
@@ -42,6 +46,22 @@ interface ListResult {
     totalPages?: number;
     total?: number;
   };
+}
+
+interface TransformApiVariant {
+  hash: string;
+  url?: string;
+  format?: string;
+  contentType?: string;
+  size?: number;
+  width?: number;
+  height?: number;
+}
+
+interface TransformApiResult {
+  imageId: string;
+  cached: boolean;
+  variant: TransformApiVariant;
 }
 
 interface TransformState {
@@ -88,8 +108,9 @@ const WATERMARK_POSITIONS: WatermarkPosition[] = [
 ];
 
 const inputClass =
-  'w-full rounded-lg border border-slate-300 px-3 py-2 text-sm outline-none focus:border-slate-700';
-const panelClass = 'rounded-2xl border border-slate-200 bg-white p-4 shadow-sm';
+  'w-full rounded-xl border border-sky-200 bg-white/95 px-3 py-2 text-sm text-slate-800 shadow-sm outline-none transition focus:border-sky-500 focus:ring-2 focus:ring-sky-200/70 disabled:bg-slate-100/70';
+const panelClass =
+  'rounded-2xl border border-sky-100 bg-white/85 p-4 shadow-[0_20px_45px_-30px_rgba(14,73,169,0.45)] backdrop-blur';
 
 const INITIAL_TRANSFORM_STATE: TransformState = {
   resizeWidth: '',
@@ -286,6 +307,7 @@ export default function Home() {
   const { authFetch, logout } = useAuth();
 
   const applySequence = useRef(0);
+  const uploadInputRef = useRef<HTMLInputElement | null>(null);
 
   const [authReady, setAuthReady] = useState(false);
   const [images, setImages] = useState<ImageItem[]>([]);
@@ -295,8 +317,6 @@ export default function Home() {
   const [isLoadingImages, setIsLoadingImages] = useState(false);
   const [imagesError, setImagesError] = useState<string | null>(null);
 
-  const [uploadFile, setUploadFile] = useState<File | null>(null);
-  const [uploadInputKey, setUploadInputKey] = useState(0);
   const [isUploading, setIsUploading] = useState(false);
   const [uploadMessage, setUploadMessage] = useState('');
   const [uploadError, setUploadError] = useState('');
@@ -308,7 +328,9 @@ export default function Home() {
   const [transformError, setTransformError] = useState('');
   const [transformHelper, setTransformHelper] = useState('');
   const [isApplying, setIsApplying] = useState(false);
+  const [isSaving, setIsSaving] = useState(false);
   const [appliedVariantHash, setAppliedVariantHash] = useState('');
+  const [appliedFromCache, setAppliedFromCache] = useState(false);
 
   const [previewUrl, setPreviewUrl] = useState<string | null>(null);
   const [previewName, setPreviewName] = useState('');
@@ -419,6 +441,7 @@ export default function Home() {
     try {
       if (Object.keys(transformations).length === 0) {
         setAppliedVariantHash('');
+        setAppliedFromCache(false);
         await fetchPreview(selectedImageId, undefined, sequence);
         return;
       }
@@ -456,6 +479,7 @@ export default function Home() {
       const match = contentDisposition.match(/filename="([^"]+)"/i);
       setPreviewName(match?.[1] ?? `image-${selectedImageId}-preview`);
       setAppliedVariantHash('');
+      setAppliedFromCache(false);
     } catch (error) {
       if (sequence === applySequence.current) {
         setTransformError(error instanceof Error ? error.message : 'Failed to apply transformation.');
@@ -466,6 +490,86 @@ export default function Home() {
       }
     }
   }, [authFetch, fetchPreview, forceLogout, replacePreview, selectedImageId, transformState]);
+
+  const saveTransformVariant = useCallback(async () => {
+    if (!selectedImageId) {
+      return;
+    }
+
+    const sequence = ++applySequence.current;
+    const { transformations, helperMessage } = buildTransformations(transformState);
+
+    setTransformHelper(helperMessage ?? '');
+    setTransformError('');
+    setIsSaving(true);
+
+    try {
+      if (Object.keys(transformations).length === 0) {
+        setTransformError('Add at least one transformation before saving.');
+        return;
+      }
+
+      const saveResponse = await authFetch(`/images/${selectedImageId}/transform/save`, {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+        },
+        body: JSON.stringify({ transformations }),
+      });
+
+      if (saveResponse.status === 401) {
+        forceLogout();
+        return;
+      }
+
+      const payload = (await parseJsonOrText(saveResponse)) as TransformApiResult;
+
+      if (!saveResponse.ok) {
+        if (sequence === applySequence.current) {
+          setTransformError(getErrorMessage(payload, 'Failed to save transformation.'));
+        }
+        return;
+      }
+
+      if (sequence !== applySequence.current) {
+        return;
+      }
+
+      const variantHash =
+        payload &&
+        isRecord(payload) &&
+        isRecord(payload.variant) &&
+        typeof payload.variant.hash === 'string'
+          ? payload.variant.hash
+          : '';
+
+      if (!variantHash) {
+        setTransformError('Invalid save response from server.');
+        return;
+      }
+
+      setAppliedVariantHash(variantHash);
+      setAppliedFromCache(Boolean(payload.cached));
+      await fetchPreview(selectedImageId, variantHash, sequence);
+      await loadImages(page);
+    } catch (error) {
+      if (sequence === applySequence.current) {
+        setTransformError(error instanceof Error ? error.message : 'Failed to save transformation.');
+      }
+    } finally {
+      if (sequence === applySequence.current) {
+        setIsSaving(false);
+      }
+    }
+  }, [
+    authFetch,
+    fetchPreview,
+    forceLogout,
+    loadImages,
+    page,
+    selectedImageId,
+    transformState,
+  ]);
 
   useEffect(() => {
     const token = window.localStorage.getItem(TOKEN_KEY);
@@ -493,6 +597,7 @@ export default function Home() {
     if (images.length === 0) {
       setSelectedImageId('');
       setAppliedVariantHash('');
+      setAppliedFromCache(false);
       replacePreview(null);
       setPreviewName('');
       return;
@@ -517,29 +622,18 @@ export default function Home() {
       return;
     }
 
-    const timer = window.setTimeout(() => {
-      void applyTransformPreview();
-    }, 450);
+    const sequence = ++applySequence.current;
+    void fetchPreview(selectedImageId, undefined, sequence);
+  }, [authReady, fetchPreview, selectedImageId]);
 
-    return () => {
-      window.clearTimeout(timer);
-    };
-  }, [authReady, applyTransformPreview, selectedImageId, transformState]);
-
-  const handleUpload = useCallback(async () => {
-    if (!uploadFile) {
-      setUploadError('Please select an image file.');
-      setUploadMessage('');
-      return;
-    }
-
+  const handleUpload = useCallback(async (file: File) => {
     setIsUploading(true);
     setUploadError('');
     setUploadMessage('');
 
     try {
       const formData = new FormData();
-      formData.append('file', uploadFile);
+      formData.append('file', file);
 
       const response = await authFetch('/images', {
         method: 'POST',
@@ -563,8 +657,6 @@ export default function Home() {
       }
 
       setUploadMessage('Image uploaded successfully.');
-      setUploadFile(null);
-      setUploadInputKey((value) => value + 1);
       setTransformState(INITIAL_TRANSFORM_STATE);
       setAppliedVariantHash('');
       setPage(1);
@@ -574,7 +666,28 @@ export default function Home() {
     } finally {
       setIsUploading(false);
     }
-  }, [authFetch, forceLogout, loadImages, uploadFile]);
+  }, [authFetch, forceLogout, loadImages]);
+
+  const openUploadPicker = useCallback(() => {
+    if (isUploading) {
+      return;
+    }
+    uploadInputRef.current?.click();
+  }, [isUploading]);
+
+  const handleUploadFileChange = useCallback(
+    (event: ChangeEvent<HTMLInputElement>) => {
+      const file = event.currentTarget.files?.[0] ?? null;
+      event.currentTarget.value = '';
+
+      if (!file) {
+        return;
+      }
+
+      void handleUpload(file);
+    },
+    [handleUpload],
+  );
 
   const handleSelectImage = useCallback((imageId: string) => {
     setSelectedImageId(imageId);
@@ -582,6 +695,7 @@ export default function Home() {
     setTransformError('');
     setTransformHelper('');
     setAppliedVariantHash('');
+    setAppliedFromCache(false);
     setDeleteError('');
   }, []);
 
@@ -622,6 +736,7 @@ export default function Home() {
           setTransformError('');
           setTransformHelper('');
           setAppliedVariantHash('');
+          setAppliedFromCache(false);
           replacePreview(null);
           setPreviewName('');
         }
@@ -660,6 +775,7 @@ export default function Home() {
     setTransformError('');
     setTransformHelper('');
     setAppliedVariantHash('');
+    setAppliedFromCache(false);
     applySequence.current += 1;
     void fetchPreview(selectedImageId);
   }, [fetchPreview, selectedImageId]);
@@ -669,22 +785,30 @@ export default function Home() {
   }
 
   return (
-    <main className="min-h-screen bg-slate-100 px-4 py-6">
-      <div className="mx-auto max-w-375 space-y-4">
-        <header className="rounded-2xl border border-slate-200 bg-white p-4 shadow-sm">
-          <div className="flex flex-wrap items-center justify-between gap-3">
+    <main className="relative min-h-screen overflow-hidden px-4 py-6">
+      <div className="pointer-events-none absolute -left-24 top-8 h-72 w-72 rounded-full bg-sky-300/35 blur-3xl" />
+      <div className="pointer-events-none absolute -right-20 top-16 h-80 w-80 rounded-full bg-indigo-300/35 blur-3xl" />
+      <div className="pointer-events-none absolute bottom-0 left-1/4 h-80 w-80 rounded-full bg-cyan-300/25 blur-3xl" />
+
+      <div className="mx-auto max-w-[1700px] space-y-4">
+        <header className="relative overflow-hidden rounded-3xl border border-sky-400/40 bg-gradient-to-r from-sky-600 via-blue-600 to-indigo-600 p-5 text-white shadow-[0_24px_60px_-30px_rgba(30,64,175,0.65)]">
+          <div className="pointer-events-none absolute inset-y-0 right-0 w-1/2 bg-[radial-gradient(circle_at_right,rgba(255,255,255,0.26),transparent_62%)]" />
+          <div className="relative flex flex-wrap items-center justify-between gap-4">
             <div>
-              <h1 className="text-2xl font-semibold text-slate-900">Image Editor</h1>
-              <p className="text-sm text-slate-600">Live preview: changes are applied automatically.</p>
+              <p className="text-xs uppercase tracking-[0.22em] text-sky-100">Media Console</p>
+              <h1 className="mt-1 text-3xl font-semibold">Cloud Studio</h1>
+              <p className="mt-1 text-sm text-sky-100">
+                Live preview powered by cached image variants.
+              </p>
             </div>
-            <div className="flex items-center gap-2">
-              <span className="rounded-md border border-slate-200 bg-slate-50 px-2.5 py-1 text-xs text-slate-600">
-                {totalItems} images
+            <div className="flex flex-wrap items-center gap-2">
+              <span className="rounded-full border border-white/40 bg-white/15 px-3 py-1 text-xs font-medium text-white">
+                {totalItems} assets
               </span>
               <button
                 type="button"
                 onClick={() => void loadImages(page)}
-                className="rounded-lg border border-slate-300 bg-white px-4 py-2 text-sm text-slate-700 hover:bg-slate-100"
+                className="rounded-xl border border-white/45 bg-white/10 px-4 py-2 text-sm text-white transition hover:bg-white/20"
               >
                 Refresh
               </button>
@@ -694,7 +818,7 @@ export default function Home() {
                   logout();
                   router.replace('/login');
                 }}
-                className="rounded-lg bg-slate-900 px-4 py-2 text-sm font-medium text-white hover:bg-slate-700"
+                className="rounded-xl bg-white px-4 py-2 text-sm font-semibold text-blue-700 transition hover:bg-sky-100"
               >
                 Logout
               </button>
@@ -702,27 +826,29 @@ export default function Home() {
           </div>
         </header>
 
-        <section className="grid gap-4 xl:grid-cols-[280px_minmax(0,1fr)_360px]">
+        <section className="grid gap-4 xl:grid-cols-[300px_minmax(0,1fr)_380px]">
           <aside className="space-y-4">
             <div className={panelClass}>
-              <h2 className="text-base font-semibold text-slate-900">Upload</h2>
+              <h2 className="text-base font-semibold text-slate-900">Upload Asset</h2>
+              <p className="mt-1 text-xs text-slate-500">
+                Click the button, pick a file, it uploads immediately.
+              </p>
               <div className="mt-3 space-y-3">
                 <input
-                  key={uploadInputKey}
+                  ref={uploadInputRef}
                   type="file"
                   accept="image/*"
-                  className={inputClass}
-                  onChange={(event) => setUploadFile(event.currentTarget.files?.[0] ?? null)}
+                  className="hidden"
+                  onChange={handleUploadFileChange}
                 />
                 <button
                   type="button"
-                  onClick={() => void handleUpload()}
+                  onClick={openUploadPicker}
                   disabled={isUploading}
-                  className="w-full rounded-lg bg-cyan-600 px-4 py-2 text-sm font-medium text-white hover:bg-cyan-700 disabled:opacity-70"
+                  className="w-full rounded-xl bg-gradient-to-r from-sky-600 to-blue-700 px-4 py-2 text-sm font-semibold text-white shadow-sm transition hover:from-sky-700 hover:to-blue-800 disabled:opacity-70"
                 >
                   {isUploading ? 'Uploading...' : 'Upload image'}
                 </button>
-                {uploadFile ? <p className="text-xs text-slate-600">Selected: {uploadFile.name}</p> : null}
                 {uploadError ? <p className="text-sm text-red-600">{uploadError}</p> : null}
                 {uploadMessage ? <p className="text-sm text-green-700">{uploadMessage}</p> : null}
               </div>
@@ -730,14 +856,16 @@ export default function Home() {
 
             <div className={panelClass}>
               <div className="mb-2 flex items-center justify-between">
-                <h2 className="text-base font-semibold text-slate-900">Your Images</h2>
-                <span className="text-xs text-slate-500">Page {page}/{totalPages}</span>
+                <h2 className="text-base font-semibold text-slate-900">Library</h2>
+                <span className="rounded-full bg-sky-100 px-2.5 py-0.5 text-xs text-sky-700">
+                  Page {page}/{totalPages}
+                </span>
               </div>
               {imagesError ? <p className="mb-2 text-sm text-red-600">{imagesError}</p> : null}
               {deleteError ? <p className="mb-2 text-sm text-red-600">{deleteError}</p> : null}
-              <div className="max-h-120 space-y-2 overflow-auto pr-1">
+              <div className="max-h-[30rem] space-y-2 overflow-auto pr-1">
                 {images.length === 0 && !isLoadingImages ? (
-                  <p className="rounded-md border border-dashed border-slate-300 p-3 text-sm text-slate-600">
+                  <p className="rounded-xl border border-dashed border-sky-200 bg-sky-50/70 p-3 text-sm text-slate-600">
                     No uploaded images.
                   </p>
                 ) : null}
@@ -745,10 +873,10 @@ export default function Home() {
                 {images.map((image) => (
                   <div
                     key={image.id}
-                    className={`w-full rounded-lg border p-3 text-left transition ${
+                    className={`w-full rounded-xl border p-3 text-left transition ${
                       selectedImageId === image.id
-                        ? 'border-cyan-600 bg-cyan-50'
-                        : 'border-slate-200 bg-slate-50 hover:bg-slate-100'
+                        ? 'border-sky-400 bg-gradient-to-r from-sky-50 to-blue-50'
+                        : 'border-slate-200 bg-white hover:border-sky-200 hover:bg-sky-50/40'
                     }`}
                   >
                     <button
@@ -756,17 +884,20 @@ export default function Home() {
                       onClick={() => handleSelectImage(image.id)}
                       className="w-full text-left"
                     >
-                      <p className="truncate text-sm font-medium text-slate-900">{image.original.originalName}</p>
+                      <p className="truncate text-sm font-semibold text-slate-900">{image.original.originalName}</p>
                       <p className="mt-1 text-xs text-slate-600">
                         {image.original.width ?? '-'} x {image.original.height ?? '-'} | {image.original.format}
                       </p>
                       <p className="text-xs text-slate-500">{fileSize(image.original.size)}</p>
+                      <p className="mt-1 text-xs font-medium text-sky-700">
+                        Variants: {image.variants.length}
+                      </p>
                     </button>
                     <button
                       type="button"
                       onClick={() => void handleDeleteImage(image.id)}
                       disabled={deletingImageId === image.id}
-                      className="mt-2 w-full rounded-lg border border-rose-300 bg-white px-2 py-1.5 text-xs font-medium text-rose-700 hover:bg-rose-50 disabled:opacity-50"
+                      className="mt-2 w-full rounded-lg border border-rose-300 bg-white px-2 py-1.5 text-xs font-medium text-rose-700 transition hover:bg-rose-50 disabled:opacity-50"
                     >
                       {deletingImageId === image.id ? 'Deleting...' : 'Delete'}
                     </button>
@@ -779,7 +910,7 @@ export default function Home() {
                   type="button"
                   onClick={() => setPage((value) => Math.max(1, value - 1))}
                   disabled={page <= 1 || isLoadingImages}
-                  className="rounded-lg border border-slate-300 bg-white px-3 py-2 text-sm text-slate-700 hover:bg-slate-100 disabled:opacity-50"
+                  className="rounded-xl border border-sky-200 bg-white px-3 py-2 text-sm text-slate-700 transition hover:bg-sky-50 disabled:opacity-50"
                 >
                   Prev
                 </button>
@@ -787,7 +918,7 @@ export default function Home() {
                   type="button"
                   onClick={() => setPage((value) => Math.min(totalPages, value + 1))}
                   disabled={page >= totalPages || isLoadingImages}
-                  className="rounded-lg border border-slate-300 bg-white px-3 py-2 text-sm text-slate-700 hover:bg-slate-100 disabled:opacity-50"
+                  className="rounded-xl border border-sky-200 bg-white px-3 py-2 text-sm text-slate-700 transition hover:bg-sky-50 disabled:opacity-50"
                 >
                   Next
                 </button>
@@ -798,44 +929,61 @@ export default function Home() {
           <section className={panelClass}>
             <div className="mb-3 flex flex-wrap items-center justify-between gap-2">
               <div>
-                <h2 className="text-base font-semibold text-slate-900">Preview</h2>
+                <h2 className="text-base font-semibold text-slate-900">Preview Canvas</h2>
                 <p className="text-xs text-slate-600">
-                  {selectedImage ? selectedImage.original.originalName : 'Select an image from the left'}
+                  {selectedImage ? selectedImage.original.originalName : 'Select an image from the library'}
                 </p>
               </div>
               <button
                 type="button"
                 onClick={handleReset}
                 disabled={!selectedImageId}
-                className="rounded-lg border border-slate-300 bg-white px-3 py-2 text-sm font-medium text-slate-700 hover:bg-slate-100 disabled:opacity-50"
+                className="rounded-xl border border-sky-200 bg-white px-3 py-2 text-sm font-medium text-slate-700 transition hover:bg-sky-50 disabled:opacity-50"
               >
                 Reset
               </button>
             </div>
 
-            <div className="mb-3 flex items-center gap-2 text-xs text-slate-600">
+            <div className="mb-3 flex flex-wrap items-center gap-2 text-xs text-slate-600">
               <span
                 className={`inline-block h-2.5 w-2.5 rounded-full ${
-                  isApplying ? 'bg-amber-500' : 'bg-emerald-500'
+                  isApplying || isSaving ? 'bg-amber-500' : 'bg-emerald-500'
                 }`}
               />
-              {isApplying ? 'Applying changes...' : 'Up to date'}
+              <span>
+                {isApplying
+                  ? 'Applying preview...'
+                  : isSaving
+                    ? 'Saving variant...'
+                    : 'Ready'}
+              </span>
+              {appliedVariantHash ? (
+                <span
+                  className={`rounded-full px-2.5 py-1 font-medium ${
+                    appliedFromCache
+                      ? 'bg-emerald-100 text-emerald-700'
+                      : 'bg-sky-100 text-sky-700'
+                  }`}
+                >
+                  {appliedFromCache ? 'Cached' : 'New'} variant {appliedVariantHash.slice(0, 8)}
+                </span>
+              ) : null}
             </div>
 
-            <div className="flex min-h-155 items-center justify-center rounded-xl border border-slate-200 bg-slate-50 p-3">
+            <div className="flex min-h-[38rem] items-center justify-center rounded-2xl border border-sky-100 bg-gradient-to-b from-sky-50/80 to-white p-3">
               {previewUrl ? (
                 <div className="w-full space-y-3">
                   <img
                     src={previewUrl}
                     alt="Preview"
-                    className="max-h-135 w-full rounded-lg object-contain"
+                    className="max-h-[32rem] w-full rounded-xl bg-white object-contain shadow-sm"
                   />
                   <div className="flex items-center justify-between gap-2">
                     <span className="truncate text-xs text-slate-600">{previewName}</span>
                     <a
                       href={previewUrl}
                       download={previewName || 'image'}
-                      className="rounded-md border border-slate-300 bg-white px-3 py-1 text-xs text-slate-700 hover:bg-slate-100"
+                      className="rounded-lg border border-sky-200 bg-white px-3 py-1 text-xs text-sky-700 transition hover:bg-sky-50"
                     >
                       Download
                     </a>
@@ -848,8 +996,10 @@ export default function Home() {
           </section>
 
           <aside className={panelClass}>
-            <h2 className="text-base font-semibold text-slate-900">Tools</h2>
-            <p className="mt-1 text-xs text-slate-600">Changes are auto-applied after a short pause.</p>
+            <h2 className="text-base font-semibold text-slate-900">Transform Studio</h2>
+            <p className="mt-1 text-xs text-slate-600">
+              Apply for preview only. Save to store variant in S3 and database.
+            </p>
 
             <div className="mt-4 space-y-3">
               <div className="grid gap-2 sm:grid-cols-2 xl:grid-cols-2">
@@ -929,7 +1079,7 @@ export default function Home() {
               </div>
 
               <div className="grid grid-cols-2 gap-2 text-sm text-slate-700">
-                <label className="flex items-center gap-2">
+                <label className="flex items-center gap-2 rounded-lg border border-sky-100 bg-sky-50/50 px-2 py-1.5">
                   <input
                     type="checkbox"
                     disabled={!selectedImageId}
@@ -940,7 +1090,7 @@ export default function Home() {
                   />
                   Flip
                 </label>
-                <label className="flex items-center gap-2">
+                <label className="flex items-center gap-2 rounded-lg border border-sky-100 bg-sky-50/50 px-2 py-1.5">
                   <input
                     type="checkbox"
                     disabled={!selectedImageId}
@@ -951,7 +1101,7 @@ export default function Home() {
                   />
                   Mirror
                 </label>
-                <label className="flex items-center gap-2">
+                <label className="flex items-center gap-2 rounded-lg border border-sky-100 bg-sky-50/50 px-2 py-1.5">
                   <input
                     type="checkbox"
                     disabled={!selectedImageId}
@@ -962,7 +1112,7 @@ export default function Home() {
                   />
                   Grayscale
                 </label>
-                <label className="flex items-center gap-2">
+                <label className="flex items-center gap-2 rounded-lg border border-sky-100 bg-sky-50/50 px-2 py-1.5">
                   <input
                     type="checkbox"
                     disabled={!selectedImageId}
@@ -975,7 +1125,7 @@ export default function Home() {
                 </label>
               </div>
 
-              <details className="rounded-lg border border-slate-200 bg-slate-50 p-3" open>
+              <details className="rounded-xl border border-sky-100 bg-sky-50/50 p-3" open>
                 <summary className="cursor-pointer text-sm font-medium text-slate-700">Crop and Watermark</summary>
                 <div className="mt-3 grid gap-2">
                   <div className="grid grid-cols-2 gap-2">
@@ -1083,6 +1233,33 @@ export default function Home() {
 
               {transformHelper ? <p className="text-xs text-amber-700">{transformHelper}</p> : null}
               {transformError ? <p className="text-sm text-red-600">{transformError}</p> : null}
+
+              <div className="grid grid-cols-3 gap-2">
+                <button
+                  type="button"
+                  onClick={() => void applyTransformPreview()}
+                  disabled={!selectedImageId || isApplying || isSaving}
+                  className="rounded-xl border border-sky-200 bg-white px-3 py-2 text-sm font-semibold text-sky-700 transition hover:bg-sky-50 disabled:opacity-50"
+                >
+                  {isApplying ? 'Applying...' : 'Apply'}
+                </button>
+                <button
+                  type="button"
+                  onClick={() => void saveTransformVariant()}
+                  disabled={!selectedImageId || isApplying || isSaving}
+                  className="rounded-xl bg-gradient-to-r from-sky-600 to-blue-700 px-3 py-2 text-sm font-semibold text-white transition hover:from-sky-700 hover:to-blue-800 disabled:opacity-50"
+                >
+                  {isSaving ? 'Saving...' : 'Save'}
+                </button>
+                <button
+                  type="button"
+                  onClick={handleReset}
+                  disabled={!selectedImageId || isSaving}
+                  className="rounded-xl border border-sky-200 bg-white px-3 py-2 text-sm font-medium text-slate-700 transition hover:bg-sky-50 disabled:opacity-50"
+                >
+                  Show original
+                </button>
+              </div>
             </div>
           </aside>
         </section>

@@ -17,15 +17,28 @@ import {
 import type { Response } from 'express';
 import { FileInterceptor } from '@nestjs/platform-express';
 import { AuthGuard } from '../auth/guards/auth.guard';
+import { CreateUploadUrlDto } from './dto/create-upload-url.dto';
+import { FinalizeUploadDto } from './dto/finalize-upload.dto';
 import { ListImagesQueryDto } from './dto/list-images-query.dto';
 import { RetrieveImageQueryDto } from './dto/retrieve-image-query.dto';
 import { TransformImageDto } from './dto/transform-image.dto';
+import { TransformRateLimitGuard } from './guards/transform-rate-limit.guard';
 import { ImagesService } from './images.service';
 
 @Controller('images')
 @UseGuards(AuthGuard)
 export class ImagesController {
   constructor(private readonly imagesService: ImagesService) {}
+
+  @Post('upload-url')
+  createUploadUrl(@Req() req, @Body() dto: CreateUploadUrlDto) {
+    return this.imagesService.createUploadUrl(req.userId, dto);
+  }
+
+  @Post('finalize-upload')
+  finalizeUpload(@Req() req, @Body() dto: FinalizeUploadDto) {
+    return this.imagesService.finalizeUpload(req.userId, dto);
+  }
 
   @Post()
   @UseInterceptors(FileInterceptor('file'))
@@ -38,6 +51,7 @@ export class ImagesController {
   }
 
   @Post(':id/transform')
+  @UseGuards(TransformRateLimitGuard)
   async transformImage(
     @Req() req,
     @Param('id') id: string,
@@ -48,6 +62,12 @@ export class ImagesController {
     res.setHeader('Content-Type', file.contentType);
     res.setHeader('Content-Disposition', `inline; filename="${file.fileName}"`);
     return new StreamableFile(file.buffer);
+  }
+
+  @Post(':id/transform/save')
+  @UseGuards(TransformRateLimitGuard)
+  saveTransformedImage(@Req() req, @Param('id') id: string, @Body() dto: TransformImageDto) {
+    return this.imagesService.saveTransformedImage(req.userId, id, dto);
   }
 
   @Get()

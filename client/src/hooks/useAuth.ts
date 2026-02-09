@@ -117,7 +117,7 @@ export function useAuth() {
   const signIn = useCallback(async (payload: SignInPayload): Promise<AuthResult> => {
     setIsLoading(true);
     try {
-      const response = await request('/auth/sign-in', {
+      const response = await request('/login', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify(payload),
@@ -141,7 +141,7 @@ export function useAuth() {
   const signUp = useCallback(async (payload: SignUpPayload): Promise<AuthResult> => {
     setIsLoading(true);
     try {
-      const response = await request('/auth/sign-up', {
+      const response = await request('/register', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify(payload),

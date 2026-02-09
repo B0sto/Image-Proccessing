@@ -4,25 +4,34 @@ import { SignUpDto } from './dto/sign-up.dto';
 import { SignInDto } from './dto/sign-in.dto';
 import { AuthGuard } from './guards/auth.guard';
 
-@Controller('auth')
+@Controller()
 export class AuthController {
   constructor(private readonly authService: AuthService) {}
 
-  @Post("sign-up")
-  signUp(@Body() signUpDto:SignUpDto) {
+  @Post('register')
+  register(@Body() signUpDto: SignUpDto) {
     return this.authService.signUp(signUpDto);
   }
 
-  @Post("sign-in")
-  signIn(@Body() signInDto:SignInDto) {
+  @Post('login')
+  login(@Body() signInDto: SignInDto) {
+    return this.authService.singIn(signInDto);
+  }
+
+  @Post('auth/sign-up')
+  legacySignUp(@Body() signUpDto: SignUpDto) {
+    return this.authService.signUp(signUpDto);
+  }
+
+  @Post('auth/sign-in')
+  legacySignIn(@Body() signInDto: SignInDto) {
     return this.authService.singIn(signInDto);
   }
 
   @UseGuards(AuthGuard)
-  @Get("current-user")
+  @Get('auth/current-user')
   currentUser(@Req() req) {
-    const userId = req.userId
+    const userId = req.userId;
     return this.authService.currentUser(userId);
   }
-
 }

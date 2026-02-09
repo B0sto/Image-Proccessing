@@ -4,10 +4,12 @@ import {
   NotFoundException,
 } from '@nestjs/common';
 import { InjectModel } from '@nestjs/mongoose';
+import { createHash } from 'crypto';
 import { Express } from 'express';
 import { Model, Types } from 'mongoose';
 import sharp, { Sharp } from 'sharp';
-import { AwsService } from '../aws/aws.service';
+import { CreateUploadUrlDto } from './dto/create-upload-url.dto';
+import { FinalizeUploadDto } from './dto/finalize-upload.dto';
 import { RetrieveImageQueryDto } from './dto/retrieve-image-query.dto';
 import {
   SUPPORTED_IMAGE_FORMATS,
@@ -15,12 +17,31 @@ import {
   TransformImageDto,
   TransformationsDto,
 } from './dto/transform-image.dto';
+import { ImageStorageService } from './image-storage.service';
 import { Image, ImageDocument, ImageVariant } from './schema/image.schema';
 
 interface BinaryImageResult {
   buffer: Buffer;
   contentType: string;
   fileName: string;
+}
+
+export interface TransformVariantResponse {
+  hash: string;
+  url: string;
+  format: string;
+  contentType: string;
+  size: number;
+  width?: number;
+  height?: number;
+  transformations: Record<string, unknown>;
+  createdAt: Date;
+}
+
+export interface TransformImageResponse {
+  imageId: string;
+  cached: boolean;
+  variant: TransformVariantResponse;
 }
 
 interface TransformedResult {
@@ -37,8 +58,72 @@ const OUTPUT_FORMATS = new Set<SupportedImageFormat>(SUPPORTED_IMAGE_FORMATS);
 export class ImagesService {
   constructor(
     @InjectModel('image') private readonly imageModel: Model<Image>,
-    private readonly awsService: AwsService,
+    private readonly imageStorage: ImageStorageService,
   ) {}
+
+  async createUploadUrl(userId: string, dto: CreateUploadUrlDto) {
+    this.ensureValidObjectId(userId, 'userId');
+
+    if (!dto.contentType?.startsWith('image/')) {
+      throw new BadRequestException('Only image content types are supported');
+    }
+
+    const fileFormat =
+      this.extractFormatFromFileName(dto.fileName) ??
+      this.mimeToFormat(dto.contentType);
+    if (!fileFormat) {
+      throw new BadRequestException('Unsupported source image format');
+    }
+
+    const key = `images/pending/${userId}/${Date.now()}-${Math.random().toString(36).slice(2, 10)}.${this.toStorageExtension(fileFormat)}`;
+    return this.imageStorage.createPresignedPutUrl(
+      key,
+      dto.contentType,
+      dto.expiresInSeconds ?? 300,
+    );
+  }
+
+  async finalizeUpload(userId: string, dto: FinalizeUploadDto) {
+    this.ensureValidObjectId(userId, 'userId');
+
+    const prefix = `images/pending/${userId}/`;
+    if (!dto.key.startsWith(prefix)) {
+      throw new BadRequestException('Invalid upload key for this user');
+    }
+
+    const object = await this.imageStorage.getObject(dto.key);
+    const contentType = dto.contentType?.trim() || object.contentType;
+    if (!contentType?.startsWith('image/')) {
+      throw new BadRequestException('Uploaded object is not an image');
+    }
+
+    const metadata = await sharp(object.buffer).metadata();
+    const normalizedFormat = this.normalizeFormat(
+      metadata.format ??
+        this.mimeToFormat(contentType) ??
+        this.extractFormatFromFileName(dto.fileName) ??
+        'jpeg',
+    );
+
+    if (!normalizedFormat) {
+      throw new BadRequestException('Unsupported source image format');
+    }
+
+    const image = new this.imageModel({
+      owner: new Types.ObjectId(userId),
+      originalKey: dto.key,
+      originalName: dto.fileName,
+      contentType,
+      format: normalizedFormat,
+      size: object.contentLength || object.buffer.length,
+      width: metadata.width,
+      height: metadata.height,
+      variants: [],
+    });
+
+    await image.save();
+    return this.toImageResponse(image as unknown as ImageDocument);
+  }
 
   async uploadImage(userId: string, file: Express.Multer.File) {
     this.ensureValidObjectId(userId, 'userId');
@@ -71,16 +156,12 @@ export class ImagesService {
 
     const imageId = image._id.toString();
     const originalKey = this.buildOriginalKey(imageId, normalizedFormat);
-    await this.awsService.uploadObject(
-      originalKey,
-      file.buffer,
-      image.contentType,
-    );
+    await this.imageStorage.uploadObject(originalKey, file.buffer, image.contentType);
 
     image.originalKey = originalKey;
     await image.save();
 
-    return this.toImageResponse(image);
+    return this.toImageResponse(image as unknown as ImageDocument);
   }
 
   async listImages(userId: string, page = 1, limit = 10) {
@@ -121,7 +202,7 @@ export class ImagesService {
       ...(image.variants ?? []).map((variant) => variant.key),
     ].filter((key) => !!key);
 
-    await this.awsService.deleteObjects(keysToDelete);
+    await this.imageStorage.deleteObjects(keysToDelete);
     await this.imageModel.deleteOne({ _id: image._id });
 
     return {
@@ -138,12 +219,28 @@ export class ImagesService {
   ): Promise<BinaryImageResult> {
     const image = await this.findOwnedImage(userId, imageId);
     const transformations = dto.transformations;
+    const normalizedImageId = image._id.toString();
 
     if (!transformations || Object.keys(transformations).length === 0) {
       throw new BadRequestException('At least one transformation is required');
     }
 
-    const source = await this.awsService.getObject(image.originalKey);
+    const plainTransformations = this.toPlainTransformations(transformations);
+    const variantHash = this.hashTransformations(plainTransformations);
+    const existingVariant = image.variants?.find(
+      (variant) => variant.hash === variantHash,
+    );
+
+    if (existingVariant) {
+      const cached = await this.imageStorage.getObject(existingVariant.key);
+      return {
+        buffer: cached.buffer,
+        contentType: existingVariant.contentType || cached.contentType,
+        fileName: `${normalizedImageId}-${existingVariant.hash}.${this.toStorageExtension(existingVariant.format as SupportedImageFormat)}`,
+      };
+    }
+
+    const source = await this.imageStorage.getObject(image.originalKey);
     const transformed = await this.applyTransformations(
       source.buffer,
       transformations,
@@ -153,7 +250,77 @@ export class ImagesService {
     return {
       buffer: transformed.buffer,
       contentType: transformed.contentType,
-      fileName: `${image._id.toString()}-preview.${transformed.format === 'jpg' ? 'jpeg' : transformed.format}`,
+      fileName: `${normalizedImageId}-preview.${this.toStorageExtension(transformed.format)}`,
+    };
+  }
+
+  async saveTransformedImage(
+    userId: string,
+    imageId: string,
+    dto: TransformImageDto,
+  ): Promise<TransformImageResponse> {
+    const image = await this.findOwnedImage(userId, imageId);
+    const transformations = dto.transformations;
+    const normalizedImageId = image._id.toString();
+
+    if (!transformations || Object.keys(transformations).length === 0) {
+      throw new BadRequestException('At least one transformation is required');
+    }
+
+    const plainTransformations = this.toPlainTransformations(transformations);
+    const variantHash = this.hashTransformations(plainTransformations);
+    const existingVariant = image.variants?.find(
+      (variant) => variant.hash === variantHash,
+    );
+
+    if (existingVariant) {
+      return {
+        imageId: normalizedImageId,
+        cached: true,
+        variant: this.toVariantResponse(
+          normalizedImageId,
+          existingVariant as ImageVariant,
+        ),
+      };
+    }
+
+    const source = await this.imageStorage.getObject(image.originalKey);
+    const transformed = await this.applyTransformations(
+      source.buffer,
+      transformations,
+      this.normalizeFormat(image.format) ?? 'jpeg',
+    );
+
+    const variantKey = this.buildVariantKey(
+      normalizedImageId,
+      variantHash,
+      transformed.format,
+    );
+    await this.imageStorage.uploadObject(
+      variantKey,
+      transformed.buffer,
+      transformed.contentType,
+    );
+
+    const createdVariant = {
+      hash: variantHash,
+      key: variantKey,
+      contentType: transformed.contentType,
+      format: transformed.format,
+      size: transformed.buffer.length,
+      width: transformed.width,
+      height: transformed.height,
+      transformations: plainTransformations,
+      createdAt: new Date(),
+    } as ImageVariant;
+
+    image.variants = [...(image.variants ?? []), createdVariant];
+    await image.save();
+
+    return {
+      imageId: normalizedImageId,
+      cached: false,
+      variant: this.toVariantResponse(normalizedImageId, createdVariant),
     };
   }
 
@@ -166,7 +333,7 @@ export class ImagesService {
 
     let key = image.originalKey;
     let contentType = image.contentType;
-    let fileName = `${image._id.toString()}.${this.normalizeFormat(image.format) ?? 'jpeg'}`;
+    let fileName = `${image._id.toString()}.${this.toStorageExtension((this.normalizeFormat(image.format) ?? 'jpeg') as SupportedImageFormat)}`;
 
     if (query.variant) {
       const variant = image.variants?.find(
@@ -177,10 +344,10 @@ export class ImagesService {
       }
       key = variant.key;
       contentType = variant.contentType;
-      fileName = `${image._id.toString()}-${variant.hash}.${variant.format}`;
+      fileName = `${image._id.toString()}-${variant.hash}.${this.toStorageExtension(variant.format as SupportedImageFormat)}`;
     }
 
-    const object = await this.awsService.getObject(key);
+    const object = await this.imageStorage.getObject(key);
     let outputBuffer = object.buffer;
     let outputContentType = contentType || object.contentType;
     let outputFileName = fileName;
@@ -198,7 +365,7 @@ export class ImagesService {
       outputContentType = this.formatToMime(
         this.normalizeFormat(transformed.info.format) ?? outputFormat,
       );
-      outputFileName = `${image._id.toString()}.${outputFormat}`;
+      outputFileName = `${image._id.toString()}.${this.toStorageExtension(outputFormat)}`;
     }
 
     return {
@@ -337,7 +504,19 @@ export class ImagesService {
   }
 
   private buildOriginalKey(imageId: string, format: SupportedImageFormat) {
-    return `images/${imageId}.${format === 'jpg' ? 'jpeg' : format}`;
+    return `images/original/${imageId}.${this.toStorageExtension(format)}`;
+  }
+
+  private buildVariantKey(
+    imageId: string,
+    hash: string,
+    format: SupportedImageFormat,
+  ) {
+    return `images/variants/${imageId}/${hash}.${this.toStorageExtension(format)}`;
+  }
+
+  private toStorageExtension(format: SupportedImageFormat) {
+    return format === 'jpg' ? 'jpeg' : format;
   }
 
   private formatToMime(format: SupportedImageFormat) {
@@ -369,7 +548,18 @@ export class ImagesService {
       'image/avif': 'avif',
     };
 
-    return map[mimeType] ?? null;
+    return map[mimeType.toLowerCase()] ?? null;
+  }
+
+  private extractFormatFromFileName(
+    fileName?: string,
+  ): SupportedImageFormat | null {
+    if (!fileName || !fileName.includes('.')) {
+      return null;
+    }
+
+    const extension = fileName.split('.').pop()?.toLowerCase();
+    return this.normalizeFormat(extension);
   }
 
   private normalizeFormat(format?: string | null): SupportedImageFormat | null {
@@ -393,6 +583,34 @@ export class ImagesService {
     return normalized;
   }
 
+  private toPlainTransformations(transformations: TransformationsDto) {
+    return JSON.parse(JSON.stringify(transformations)) as Record<string, unknown>;
+  }
+
+  private hashTransformations(transformations: Record<string, unknown>) {
+    const stable = this.stableStringify(transformations);
+    return createHash('sha256').update(stable).digest('hex').slice(0, 20);
+  }
+
+  private stableStringify(value: unknown): string {
+    if (Array.isArray(value)) {
+      return `[${value.map((item) => this.stableStringify(item)).join(',')}]`;
+    }
+
+    if (value && typeof value === 'object') {
+      const record = value as Record<string, unknown>;
+      const keys = Object.keys(record).sort();
+      return `{${keys
+        .map(
+          (key) =>
+            `${JSON.stringify(key)}:${this.stableStringify(record[key])}`,
+        )
+        .join(',')}}`;
+    }
+
+    return JSON.stringify(value);
+  }
+
   private buildWatermarkSvg(
     text: string,
     fontSize: number,
@@ -402,10 +620,19 @@ export class ImagesService {
   ) {
     const safeImageWidth = Math.max(1, imageWidth ?? 1);
     const safeImageHeight = Math.max(1, imageHeight ?? 1);
-    const dynamicFontSize = Math.min(fontSize, Math.max(8, Math.floor(safeImageHeight * 0.35)));
-    const estimatedTextWidth = Math.max(1, Math.ceil(text.length * dynamicFontSize * 0.65) + 20);
+    const dynamicFontSize = Math.min(
+      fontSize,
+      Math.max(8, Math.floor(safeImageHeight * 0.35)),
+    );
+    const estimatedTextWidth = Math.max(
+      1,
+      Math.ceil(text.length * dynamicFontSize * 0.65) + 20,
+    );
     const svgWidth = Math.min(estimatedTextWidth, safeImageWidth);
-    const svgHeight = Math.min(Math.max(dynamicFontSize + 16, 24), safeImageHeight);
+    const svgHeight = Math.min(
+      Math.max(dynamicFontSize + 16, 24),
+      safeImageHeight,
+    );
     const escaped = text
       .replace(/&/g, '&amp;')
       .replace(/</g, '&lt;')
@@ -451,19 +678,24 @@ export class ImagesService {
         height: doc.height,
       },
       variants: (doc.variants ?? []).map((variant: ImageVariant) => ({
-        hash: variant.hash,
-        url: `/images/${imageId}?variant=${variant.hash}`,
-        format: variant.format,
-        contentType: variant.contentType,
-        size: variant.size,
-        width: variant.width,
-        height: variant.height,
-        transformations: variant.transformations,
-        createdAt: variant.createdAt,
+        ...this.toVariantResponse(imageId, variant),
       })),
       createdAt: doc.createdAt,
       updatedAt: doc.updatedAt,
     };
   }
 
+  private toVariantResponse(imageId: string, variant: ImageVariant) {
+    return {
+      hash: variant.hash,
+      url: `/images/${imageId}?variant=${variant.hash}`,
+      format: variant.format,
+      contentType: variant.contentType,
+      size: variant.size,
+      width: variant.width,
+      height: variant.height,
+      transformations: variant.transformations,
+      createdAt: variant.createdAt,
+    };
+  }
 }

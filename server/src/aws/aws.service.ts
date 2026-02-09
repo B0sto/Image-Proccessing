@@ -7,16 +7,11 @@ import {
 import { BadRequestException, Injectable } from '@nestjs/common';
 import { Readable } from 'stream';
 
-export interface S3ObjectResult {
-  buffer: Buffer;
-  contentType: string;
-  contentLength: number;
-}
 
 @Injectable()
 export class AwsService {
-  private readonly bucketName: string;
-  private readonly s3: S3Client;
+  private bucketName: string;
+  private s3: S3Client;
 
   constructor() {
     this.bucketName = process.env.AWS_BUCKET_NAME ?? '';
@@ -29,88 +24,48 @@ export class AwsService {
     });
   }
 
-  async uploadObject(key: string, body: Buffer, contentType: string) {
-    if (!key || !body) {
-      throw new BadRequestException('key and body are required');
-    }
+  async uploadImage(filePath, file) {
+    if (!filePath || !file) throw new BadRequestException("filepath and file are required");
 
     const config = {
-      Key: key,
+      Key: filePath,
       Bucket: this.bucketName,
-      Body: body,
-      ContentType: contentType,
-    };
+      Body: file
+    }
 
     const uploadCommand = new PutObjectCommand(config);
+
     await this.s3.send(uploadCommand);
-    return key;
+
+    return filePath;
+
+
   }
 
-  async deleteObject(key: string) {
-    if (!key) {
-      throw new BadRequestException('key is required');
-    }
-
-    const command = new DeleteObjectCommand({
-      Key: key,
-      Bucket: this.bucketName,
-    });
-
-    await this.s3.send(command);
-  }
-
-  async deleteObjects(keys: string[]) {
-    if (!Array.isArray(keys) || keys.length === 0) {
-      return;
-    }
-
-    await Promise.all(
-      keys
-        .filter((key) => !!key)
-        .map((key) => this.deleteObject(key)),
-    );
-  }
-
-  async getObject(key: string): Promise<S3ObjectResult> {
-    if (!key) {
-      throw new BadRequestException('key is required');
-    }
+  async getImageFileById(fileId) {
+    if (!fileId) throw new BadRequestException("fileId is required");
 
     const config = {
-      Key: key,
+      Key: fileId,
       Bucket: this.bucketName,
-    };
+    }
 
     const getCommand = new GetObjectCommand(config);
     const fileStream = await this.s3.send(getCommand);
 
-    if (!(fileStream.Body instanceof Readable)) {
-      throw new BadRequestException('Unsupported file stream');
+    if (fileStream.Body instanceof Readable) {
+      const chunks: Buffer[] = [];
+
+      for await(const chunk of fileStream.Body) {
+        chunks.push(chunk);
+      }
+
+      const fileBuffer = Buffer.concat(chunks);
+      const base64 = fileBuffer.toString("base64");
+      const file = `data:${fileStream.ContentType};base64,${base64}`;
+
+      return file;
+
     }
-
-    const chunks: Buffer[] = [];
-    for await (const chunk of fileStream.Body) {
-      chunks.push(Buffer.isBuffer(chunk) ? chunk : Buffer.from(chunk));
-    }
-
-    const buffer = Buffer.concat(chunks);
-    return {
-      buffer,
-      contentType: fileStream.ContentType ?? 'application/octet-stream',
-      contentLength: Number(fileStream.ContentLength ?? buffer.length),
-    };
-  }
-
-  async uploadImage(
-    filePath: string,
-    file: Buffer,
-    contentType = 'application/octet-stream',
-  ) {
-    return this.uploadObject(filePath, file, contentType);
-  }
-
-  async getImageFileById(fileId: string) {
-    const file = await this.getObject(fileId);
-    return `data:${file.contentType};base64,${file.buffer.toString('base64')}`;
   }
 }

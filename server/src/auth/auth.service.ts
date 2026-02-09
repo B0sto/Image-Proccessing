@@ -16,9 +16,8 @@ export class AuthService {
 
         const hashedPass = await bcrypt.hash(signUpDto.password, 10);
 
-        await this.userService.create({ ...signUpDto, password: hashedPass })
-
-        return "User has been created successfully";
+        const createdUser = await this.userService.create({ ...signUpDto, password: hashedPass });
+        return this.buildAuthResponse(createdUser);
 
     }
 
@@ -35,7 +34,10 @@ export class AuthService {
         }
 
         const accessToken = await this.jwtService.sign(payload, { expiresIn: "1h" });
-        return { accessToken };
+        return {
+            user: this.serializeUser(existingUser),
+            accessToken,
+        };
 
 
     }
@@ -44,6 +46,27 @@ export class AuthService {
         const user = await this.userService.findOne(userId);
 
         return user;
+    }
+
+    private async buildAuthResponse(user: any) {
+        const payload = {
+            userId: user._id,
+        };
+
+        const accessToken = await this.jwtService.sign(payload, { expiresIn: "1h" });
+        return {
+            user: this.serializeUser(user),
+            accessToken,
+        };
+    }
+
+    private serializeUser(user: any) {
+        const serialized = user?.toObject ? user.toObject() : { ...user };
+        if (serialized?.password) {
+            delete serialized.password;
+        }
+
+        return serialized;
     }
 
 }

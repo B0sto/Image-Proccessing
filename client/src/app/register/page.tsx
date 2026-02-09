@@ -65,10 +65,13 @@ export default function RegisterPage() {
   });
 
   return (
-    <main className="min-h-screen bg-slate-100 px-4 py-10">
+    <main className="relative min-h-screen overflow-hidden px-4 py-10">
+      <div className="pointer-events-none absolute -left-20 top-14 h-72 w-72 rounded-full bg-sky-300/35 blur-3xl" />
+      <div className="pointer-events-none absolute -right-20 top-10 h-80 w-80 rounded-full bg-indigo-300/35 blur-3xl" />
       <div className="mx-auto flex min-h-[calc(100vh-5rem)] max-w-md items-center">
-        <section className="w-full rounded-2xl bg-white p-8 shadow-sm ring-1 ring-slate-200">
-          <h1 className="text-2xl font-semibold text-slate-900">Create account</h1>
+        <section className="w-full rounded-3xl border border-sky-200/70 bg-white/90 p-8 shadow-[0_24px_55px_-35px_rgba(30,64,175,0.55)] backdrop-blur">
+          <p className="text-xs uppercase tracking-[0.2em] text-sky-600">Cloud Studio</p>
+          <h1 className="mt-1 text-3xl font-semibold text-slate-900">Create account</h1>
           <p className="mt-2 text-sm text-slate-600">Start uploading and transforming your images.</p>
 
           <form className="mt-6 space-y-4" onSubmit={formik.handleSubmit} noValidate>
@@ -84,7 +87,7 @@ export default function RegisterPage() {
                 onChange={formik.handleChange}
                 onBlur={formik.handleBlur}
                 placeholder="Choose a username"
-                className="w-full rounded-lg border border-slate-300 px-3 py-2 text-sm outline-none transition focus:border-slate-800"
+                className="w-full rounded-xl border border-sky-200 bg-white px-3 py-2 text-sm outline-none transition focus:border-sky-500 focus:ring-2 focus:ring-sky-200"
               />
               {formik.touched.username && formik.errors.username ? (
                 <p className="mt-1 text-xs text-red-600">{formik.errors.username}</p>
@@ -103,7 +106,7 @@ export default function RegisterPage() {
                 onChange={formik.handleChange}
                 onBlur={formik.handleBlur}
                 placeholder="Enter your email"
-                className="w-full rounded-lg border border-slate-300 px-3 py-2 text-sm outline-none transition focus:border-slate-800"
+                className="w-full rounded-xl border border-sky-200 bg-white px-3 py-2 text-sm outline-none transition focus:border-sky-500 focus:ring-2 focus:ring-sky-200"
               />
               {formik.touched.email && formik.errors.email ? (
                 <p className="mt-1 text-xs text-red-600">{formik.errors.email}</p>
@@ -122,7 +125,7 @@ export default function RegisterPage() {
                 onChange={formik.handleChange}
                 onBlur={formik.handleBlur}
                 placeholder="Create a password"
-                className="w-full rounded-lg border border-slate-300 px-3 py-2 text-sm outline-none transition focus:border-slate-800"
+                className="w-full rounded-xl border border-sky-200 bg-white px-3 py-2 text-sm outline-none transition focus:border-sky-500 focus:ring-2 focus:ring-sky-200"
               />
               {formik.touched.password && formik.errors.password ? (
                 <p className="mt-1 text-xs text-red-600">{formik.errors.password}</p>
@@ -134,7 +137,7 @@ export default function RegisterPage() {
 
             <button
               type="submit"
-              className="mt-2 w-full rounded-lg bg-slate-900 px-4 py-2 text-sm font-medium text-white transition hover:bg-slate-700"
+              className="mt-2 w-full rounded-xl bg-gradient-to-r from-sky-600 to-blue-700 px-4 py-2 text-sm font-semibold text-white transition hover:from-sky-700 hover:to-blue-800"
             >
               {isLoading ? 'Creating account...' : 'Register'}
             </button>

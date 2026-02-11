@@ -785,23 +785,23 @@ export default function Home() {
   }
 
   return (
-    <main className="relative min-h-screen overflow-hidden px-4 py-6">
+    <main className="relative min-h-screen overflow-hidden px-3 py-4 sm:px-4 sm:py-6">
       <div className="pointer-events-none absolute -left-24 top-8 h-72 w-72 rounded-full bg-sky-300/35 blur-3xl" />
       <div className="pointer-events-none absolute -right-20 top-16 h-80 w-80 rounded-full bg-indigo-300/35 blur-3xl" />
       <div className="pointer-events-none absolute bottom-0 left-1/4 h-80 w-80 rounded-full bg-cyan-300/25 blur-3xl" />
 
       <div className="mx-auto max-w-[1700px] space-y-4">
-        <header className="relative overflow-hidden rounded-3xl border border-sky-400/40 bg-gradient-to-r from-sky-600 via-blue-600 to-indigo-600 p-5 text-white shadow-[0_24px_60px_-30px_rgba(30,64,175,0.65)]">
+        <header className="relative overflow-hidden rounded-3xl border border-sky-400/40 bg-gradient-to-r from-sky-600 via-blue-600 to-indigo-600 p-4 text-white shadow-[0_24px_60px_-30px_rgba(30,64,175,0.65)] sm:p-5">
           <div className="pointer-events-none absolute inset-y-0 right-0 w-1/2 bg-[radial-gradient(circle_at_right,rgba(255,255,255,0.26),transparent_62%)]" />
           <div className="relative flex flex-wrap items-center justify-between gap-4">
             <div>
               <p className="text-xs uppercase tracking-[0.22em] text-sky-100">Media Console</p>
-              <h1 className="mt-1 text-3xl font-semibold">Cloud Studio</h1>
+              <h1 className="mt-1 text-2xl font-semibold sm:text-3xl">Cloud Studio</h1>
               <p className="mt-1 text-sm text-sky-100">
                 Live preview powered by cached image variants.
               </p>
             </div>
-            <div className="flex flex-wrap items-center gap-2">
+            <div className="flex w-full flex-wrap items-center gap-2 sm:w-auto sm:justify-end">
               <span className="rounded-full border border-white/40 bg-white/15 px-3 py-1 text-xs font-medium text-white">
                 {totalItems} assets
               </span>
@@ -826,7 +826,7 @@ export default function Home() {
           </div>
         </header>
 
-        <section className="grid gap-4 xl:grid-cols-[300px_minmax(0,1fr)_380px]">
+        <section className="grid gap-4 lg:grid-cols-[280px_minmax(0,1fr)] xl:grid-cols-[300px_minmax(0,1fr)_380px]">
           <aside className="space-y-4">
             <div className={panelClass}>
               <h2 className="text-base font-semibold text-slate-900">Upload Asset</h2>
@@ -863,7 +863,7 @@ export default function Home() {
               </div>
               {imagesError ? <p className="mb-2 text-sm text-red-600">{imagesError}</p> : null}
               {deleteError ? <p className="mb-2 text-sm text-red-600">{deleteError}</p> : null}
-              <div className="max-h-[30rem] space-y-2 overflow-auto pr-1">
+              <div className="max-h-[22rem] space-y-2 overflow-auto pr-1 sm:max-h-[30rem]">
                 {images.length === 0 && !isLoadingImages ? (
                   <p className="rounded-xl border border-dashed border-sky-200 bg-sky-50/70 p-3 text-sm text-slate-600">
                     No uploaded images.
@@ -938,7 +938,7 @@ export default function Home() {
                 type="button"
                 onClick={handleReset}
                 disabled={!selectedImageId}
-                className="rounded-xl border border-sky-200 bg-white px-3 py-2 text-sm font-medium text-slate-700 transition hover:bg-sky-50 disabled:opacity-50"
+                className="w-full rounded-xl border border-sky-200 bg-white px-3 py-2 text-sm font-medium text-slate-700 transition hover:bg-sky-50 disabled:opacity-50 sm:w-auto"
               >
                 Reset
               </button>
@@ -970,13 +970,13 @@ export default function Home() {
               ) : null}
             </div>
 
-            <div className="flex min-h-[38rem] items-center justify-center rounded-2xl border border-sky-100 bg-gradient-to-b from-sky-50/80 to-white p-3">
+            <div className="flex min-h-[17rem] items-center justify-center rounded-2xl border border-sky-100 bg-gradient-to-b from-sky-50/80 to-white p-3 sm:min-h-[26rem] lg:min-h-[38rem]">
               {previewUrl ? (
                 <div className="w-full space-y-3">
                   <img
                     src={previewUrl}
                     alt="Preview"
-                    className="max-h-[32rem] w-full rounded-xl bg-white object-contain shadow-sm"
+                    className="max-h-[14rem] w-full rounded-xl bg-white object-contain shadow-sm sm:max-h-[22rem] lg:max-h-[32rem]"
                   />
                   <div className="flex items-center justify-between gap-2">
                     <span className="truncate text-xs text-slate-600">{previewName}</span>
@@ -995,7 +995,7 @@ export default function Home() {
             </div>
           </section>
 
-          <aside className={panelClass}>
+          <aside className={`${panelClass} lg:col-span-2 xl:col-span-1`}>
             <h2 className="text-base font-semibold text-slate-900">Transform Studio</h2>
             <p className="mt-1 text-xs text-slate-600">
               Apply for preview only. Save to store variant in S3 and database.
@@ -1234,7 +1234,7 @@ export default function Home() {
               {transformHelper ? <p className="text-xs text-amber-700">{transformHelper}</p> : null}
               {transformError ? <p className="text-sm text-red-600">{transformError}</p> : null}
 
-              <div className="grid grid-cols-3 gap-2">
+              <div className="grid grid-cols-1 gap-2 sm:grid-cols-3">
                 <button
                   type="button"
                   onClick={() => void applyTransformPreview()}

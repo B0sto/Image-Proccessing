@@ -65,13 +65,13 @@ export default function RegisterPage() {
   });
 
   return (
-    <main className="relative min-h-screen overflow-hidden px-4 py-10">
+    <main className="relative min-h-screen overflow-hidden px-4 py-6 sm:py-10">
       <div className="pointer-events-none absolute -left-20 top-14 h-72 w-72 rounded-full bg-sky-300/35 blur-3xl" />
       <div className="pointer-events-none absolute -right-20 top-10 h-80 w-80 rounded-full bg-indigo-300/35 blur-3xl" />
-      <div className="mx-auto flex min-h-[calc(100vh-5rem)] max-w-md items-center">
-        <section className="w-full rounded-3xl border border-sky-200/70 bg-white/90 p-8 shadow-[0_24px_55px_-35px_rgba(30,64,175,0.55)] backdrop-blur">
+      <div className="mx-auto flex min-h-[calc(100vh-3rem)] max-w-md items-center sm:min-h-[calc(100vh-5rem)]">
+        <section className="w-full rounded-3xl border border-sky-200/70 bg-white/90 p-6 shadow-[0_24px_55px_-35px_rgba(30,64,175,0.55)] backdrop-blur sm:p-8">
           <p className="text-xs uppercase tracking-[0.2em] text-sky-600">Cloud Studio</p>
-          <h1 className="mt-1 text-3xl font-semibold text-slate-900">Create account</h1>
+          <h1 className="mt-1 text-2xl font-semibold text-slate-900 sm:text-3xl">Create account</h1>
           <p className="mt-2 text-sm text-slate-600">Start uploading and transforming your images.</p>
 
           <form className="mt-6 space-y-4" onSubmit={formik.handleSubmit} noValidate>
